@@ -8,6 +8,7 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_glfw.h"
 #include "scene.h"
+#include "bricks.h"
 #include <filesystem>
 
 int create_scene(std::vector<CSGNode>& csg_tree, const std::string& input_path, glm::vec3& aabb_min, glm::vec3& aabb_max) {
@@ -42,6 +43,7 @@ int main(int argc, char** argv) {
     std::string shading_mode_str = "shaded";
 
     std::string anim_path = "";
+    std::string bricks_path = "";
     //std::string input_file = "../build/catalog/guy.json";
     std::string input_file = "../scenes/trees.json";
     spv_dir = ".";
@@ -61,6 +63,7 @@ int main(int argc, char** argv) {
     cli.add_option("--max-active", MAX_ACTIVE_COUNT, "Max active count");
     cli.add_option("--max-tmp", MAX_TMP_COUNT, "Max tmp count");
     cli.add_option("--anim", anim_path, "Animation directory");
+    cli.add_option("--bricks", bricks_path, ".bricks file to visualize");
     cli.add_option("--target_x", cam_target.x, "Target X");
     cli.add_option("--target_y", cam_target.y, "Target Y");
     cli.add_option("--target_z", cam_target.z, "Target Z");
@@ -91,6 +94,13 @@ int main(int argc, char** argv) {
 
     ctx.alloc_input_buffers(num_nodes);
     ctx.upload(csg_tree, root_idx);
+
+    if (!bricks_path.empty()) {
+        BricksFile bricks;
+        if (read_bricks_file(bricks_path.c_str(), bricks)) {
+            upload_bricks(ctx.init, ctx.render_data, bricks);
+        }
+    }
 
     ctx.render_data.push_constants.alpha = 1;
     ctx.render_data.culling_enabled = culling_enabled;

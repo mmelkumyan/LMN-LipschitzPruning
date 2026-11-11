@@ -329,6 +329,7 @@ int main(int argc, char** argv) {
         ImGui::SliderInt("Samples per pixel", &ctx.render_data.num_samples, 1, 64);
 
         ImGui::SliderFloat("Gamma", &ctx.render_data.gamma, 1, 4);
+        ImGui::Checkbox("Render surface", &ctx.render_data.render_enabled);
 
 #if 1
         ImGui::SeparatorText("Shader statistics");

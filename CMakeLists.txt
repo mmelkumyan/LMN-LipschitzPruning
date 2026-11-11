@@ -38,25 +38,33 @@ set(SHADER_SRCS
         culling.comp.glsl
         plane.vert.glsl
         plane.frag.glsl
-        dense_eval.comp.glsl)
+        dense_eval.comp.glsl
+        brick_lines.vert.glsl
+        brick_lines.frag.glsl)
 set(SHADER_STAGES
         vert
         frag
         comp
         vert
         frag
-        comp)
+        comp
+        vert
+        frag)
 set(SHADER_BINS
         vert.spv
         frag.spv
         culling.comp.spv
         plane.vert.spv
         plane.frag.spv
-        dense_eval.comp.spv)
+        dense_eval.comp.spv
+        brick_lines.vert.spv
+        brick_lines.frag.spv)
 
 set(SHARED_SRC
         src/utils.cpp
         src/debug_plane.cpp
+        src/bricks.cpp
+        src/brick_overlay.cpp
         src/context.cpp
         src/scene.cpp
         ext/imgui/imgui.cpp
@@ -69,6 +77,8 @@ set(SHARED_SRC
 )
 
 set(HEADERS
+    include/bricks.h
+    include/brick_overlay.h
     include/constants.h
     include/context.h
     include/debug_plane.h

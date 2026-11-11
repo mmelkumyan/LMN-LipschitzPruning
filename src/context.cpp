@@ -16,6 +16,7 @@
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_vulkan.h"
 #include "glm/gtc/matrix_transform.hpp"
+#include "brick_overlay.h"
 
 struct EvalGridPushConstants {
     glm::vec4 aabb_min;
@@ -1116,6 +1117,8 @@ int draw_frame(Init& init, RenderData& data, bool gui) {
         }
         vkCmdWriteTimestamp(data.command_buffers[i], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, data.query_pool, 3);
 
+        draw_brick_overlay(init, data, data.command_buffers[i]);
+
         init.disp.cmdEndRenderPass(data.command_buffers[i]);
 
         if (gui) {
@@ -1675,6 +1678,7 @@ void Context::initialize(bool gui, int final_grid_lvl) {
     render_data.push_constants.max_rel_err = 1;
     create_culling_pipelines(init, render_data);
     create_debug_plane_pipeline(init, render_data, render_data.debug_plane_pipeline, render_data.debug_plane_pipeline_layout);
+    create_brick_overlay_pipeline(init, render_data, render_data.brick_overlay_pipeline, render_data.brick_overlay_pipeline_layout);
     render_data.eval_grid_pipeline = create_compute_pipeline(init, "dense_eval.comp.spv", "dense_eval.comp.glsl", sizeof(EvalGridPushConstants));
     if (0 != create_framebuffers(init, render_data)) abort();
     if (0 != create_sync_objects(init, render_data)) abort();

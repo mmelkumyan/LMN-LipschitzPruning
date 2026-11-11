@@ -75,9 +75,9 @@ struct PushConstants {
 };
 
 struct Buffer {
-    VkBuffer buf;
-    VmaAllocation alloc;
-    uint64_t address;
+    VkBuffer buf; //Vulkan device buffer handle
+    VmaAllocation alloc; //needed to free
+    uint64_t address; //device address field - will be passed to the shader through a push constant
 };
 
 struct Image {
@@ -117,6 +117,9 @@ struct RenderData {
     VkPipelineLayout single_block_scan_pipeline_layout;
     VkPipeline single_block_scan_pipeline;
 
+    VkPipelineLayout brick_overlay_pipeline_layout;
+    VkPipeline brick_overlay_pipeline; 
+
     Pipeline fxaa_pipeline;
 
     VkCommandPool command_pool;
@@ -150,6 +153,8 @@ struct RenderData {
     Buffer tmp_buffer;
     Buffer mvp_buffer;
     Buffer cam_buffer;
+    Buffer brick_aabb_buffer; //6 floats per brick - min(xyz), max(xyz) (vkAabbPositionsKHR layout)
+    uint32_t brick_count = 0; //how many vertices to emit (brick_count * 24 - 12 edges, 2 vertices for each edge)
 
     int input_idx = 0;
     int output_idx = 1;

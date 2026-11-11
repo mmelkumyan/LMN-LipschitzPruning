@@ -9,9 +9,11 @@ layout(push_constant) uniform PushConstant{
     vec4 color;
 };
 
+layout(location = 0) in vec3 inColor;
+
 layout(location = 0) out vec4 outColor;
 
 void main(){
     //drawing wireframes
-    outColor = color;
+    outColor = vec4(inColor * color.rgb, 1.0);
 }

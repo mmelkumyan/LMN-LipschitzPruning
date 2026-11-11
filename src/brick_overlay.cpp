@@ -6,6 +6,7 @@ struct BrickOverlayPushConstants{
     glm::vec4 color;
     uint64_t aabbAddr;
     uint64_t matrixAddr;
+    glm::vec4 yParams;
 };
 
 void create_brick_overlay_pipeline(Init& init, RenderData& render_data, VkPipeline& pipeline, VkPipelineLayout& pipeline_layout){
@@ -163,6 +164,13 @@ void draw_brick_overlay(const Init& init, const RenderData& data, VkCommandBuffe
     static bool debugMode = true;
     ImGui::Checkbox("Show bricks", &debugMode);
     ImGui::Text("%u bricks", data.brick_count);
+
+    float low = data.aabb_min.y - 0.044f; // bounding box minus by one brick size
+    float high = data.aabb_max.y + 0.044f;
+    static float sliceMin = low; 
+    static float sliceMax = high;
+    ImGui::SliderFloat("Show bricks min", &sliceMin, low, high);
+    ImGui::SliderFloat("Show bricks max", &sliceMax, low, high);
     
     if(data.brick_count == 0 || !debugMode){
         return;
@@ -170,9 +178,10 @@ void draw_brick_overlay(const Init& init, const RenderData& data, VkCommandBuffe
 
     vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, data.brick_overlay_pipeline);
     BrickOverlayPushConstants push_constants = {
-        glm::vec4(1.0,0.0,0.0,1.0),
+        glm::vec4(1.0,1.0,1.0,1.0),
         data.brick_aabb_buffer.address,
         data.mvp_buffer.address,
+        glm::vec4(sliceMin, sliceMax, low, high),
     };
 
     vkCmdPushConstants(cmd_buf, data.brick_overlay_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(BrickOverlayPushConstants), &push_constants);

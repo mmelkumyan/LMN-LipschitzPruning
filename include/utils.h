@@ -93,8 +93,9 @@ struct BrickBakePushConstants {
     float band;
     int max_bricks;
     int total_num_nodes;
+    int tight_bricks;
 };
-static_assert(sizeof(BrickBakePushConstants) == 128);
+static_assert(sizeof(BrickBakePushConstants) == 136);
 
 struct Buffer {
     VkBuffer buf;
@@ -209,6 +210,8 @@ struct RenderData {
     bool bake_requested = false; // bake button in gui
     bool bake_recorded = false;
     int baked_brick_count = 0;
+
+    bool tight_bricks = true;
 };
 
 enum PrimitiveType {

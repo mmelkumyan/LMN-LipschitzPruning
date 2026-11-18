@@ -165,6 +165,9 @@ int main(int argc, char** argv) {
             int root_idx = create_scene(csg_tree, input_file, ctx.render_data.aabb_min, ctx.render_data.aabb_max);
             ctx.upload(csg_tree, root_idx);
         }
+
+        ImGui::Checkbox("Tight AABBs", &ctx.render_data.tight_bricks);
+        
         if (ImGui::Button("Save Bricks")) {
             ctx.render_data.bake_requested = true;
         }

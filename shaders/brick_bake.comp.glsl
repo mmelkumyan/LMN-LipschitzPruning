@@ -10,6 +10,8 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 #include "../include/constants.h"
 #include "common.glsl"
 
+#define USE_D_KEEP_TEST 0
+
 layout(push_constant) uniform PushConstant {
     // Get GPU side data from pruning shader 
     // (C++ struct needs this EXACT order!)
@@ -34,35 +36,50 @@ layout(push_constant) uniform PushConstant {
     float band;
     int max_bricks;
     int total_num_nodes;
+    int tight_bricks;
 };
 
 #include "eval.glsl"
 
-shared float s_dists[BRICK_SAMPLES]; // Each SDF sampled dist in this brick
+//shared memory
+#if USE_D_KEEP_TEST
 shared uint s_min_abs; // smallest abs dist value. If no samples touch SDF surface, skip brick
+#endif
+shared int s_quantized[BRICK_SAMPLES]; //stores each sample's quantized value
+shared uint s_aabb_min[3]; //brick's box being processed -> uint because atomicMin/atomicMax only work on integers
+shared uint s_aabb_max[3]; //brick's box being processed -> uint because atomicMin/atomicMax only work on integers
 shared uint s_slot; // dense index (after skipping empty bricks). 0xffffffffu means skip
 
 void main() {
     ivec3 brick = ivec3(gl_WorkGroupID); // Work group idx
     uint brick_idx = morton_encode(brick); // 3D idx -> 1D idx (spatially ordered w/ morton)
 
-    // If there are zero CSG nodes in this brick then skip this ENTIRE work group!
+    // SKIP this ENTIRE work group if there are zero CSG nodes in this brick 
     if (brick_cells_num_active.tab[brick_idx] == 0) {
         return;
     }
 
-    // Init min on first thread of each group
+    // Sampling
+    // Init on first thread of each group
     if (gl_LocalInvocationIndex == 0) {
-        s_min_abs = floatBitsToUint(1e30);
+#if USE_D_KEEP_TEST
+        s_min_abs = floatBitsToUint(1e30); //thread 0 sets s_min_abs to huge
+#endif
+        s_aabb_min[0] = floatBitsToUint(1e30); //initialize aabb min max values
+        s_aabb_min[1] = floatBitsToUint(1e30);
+        s_aabb_min[2] = floatBitsToUint(1e30);
+        
+        s_aabb_max[0] = floatBitsToUint(0.0);
+        s_aabb_max[1] = floatBitsToUint(0.0);
+        s_aabb_max[2] = floatBitsToUint(0.0);
     }
-
-    barrier(); // Sync all threads!
+    barrier(); // Sync all threads for initialization!
 
     // Evaluate all 9^3 samples in this block!
     // TODO: Optimize here?
     for (uint s = gl_LocalInvocationIndex; s < BRICK_SAMPLES; s+=gl_WorkGroupSize.x) {
-        // 1D idx (0-728) -> 3D idx (vec3(0-8))
-        ivec3 brickspace_pos = ivec3(s % 9, (s / 9) % 9, s / 81);
+        // 1D idx s (0-728) -> 3D idx (vec3(0-8))
+        ivec3 brickspace_pos = ivec3(s % 9, (s / 9) % 9, s / 81); //sample's position inside a brick
         ivec3 voxelspace_pos = brick * BRICK_VOXELS + brickspace_pos;
 
         // Get SDF sample position in worldspace  
@@ -75,24 +92,119 @@ void main() {
 
         // Sample SDF!
         bool near_field;
-        float d = sdf_active(world_pos, prune_idx, near_field);
+        float d = sdf_active(world_pos, prune_idx, near_field); //distance
+
+        // Quantize d here instead because we need to use quantized data to compute bounding box
+        int q = int(round(clamp(d / band, -1.f, 1.f) * 127.f));
+        s_quantized[s] = q;
 
         // Record
-        s_dists[s] = d;
-        atomicMin(s_min_abs, floatBitsToUint(abs(d)));
+#if USE_D_KEEP_TEST
+        atomicMin(s_min_abs, floatBitsToUint(abs(d))); //tracks smallest |d|
+#endif
     }
     barrier(); // Sync all threads!
+
+    //min max of all threads
+    vec3 threadMin = vec3(1e30);
+    vec3 threadMax = vec3(0.0);
+    // loop over voxels - discard ones that do not contain a surface
+    for (uint v = gl_LocalInvocationIndex; v < 512; v+=gl_WorkGroupSize.x) {
+        ivec3 voxel_pos = ivec3(v % 8, (v / 8) % 8, v / 64); //8 because we're going over voxels instead of samples
+
+        int corners[8];
+        //s000 s001 ... -> ... s110 s111
+        for(int c = 0; c < 8; c++){
+            //sample point offsets
+            int i = c & 1;
+            int j = (c >> 1) & 1;
+            int k = (c >> 2) & 1;
+
+            int sampleIdx = (voxel_pos.x + 9*voxel_pos.y + 81*voxel_pos.z) + (i + 9*j + 81*k);
+            corners[c] = s_quantized[sampleIdx]; //save sampled SDF in corners
+        }
+
+        // skip over voxels that don't have a surface
+        int minC = 128;
+        int maxC = -128;
+        for(int c = 0; c < 8; c++){
+            minC = min(minC, corners[c]);
+            maxC = max(maxC, corners[c]);
+        }
+
+        if(minC > 0 || maxC < 0){
+            continue;
+        }
+
+        // init bounding box -> zero corners lie on the surface, grow box to include them
+        vec3 bmin = vec3(1.);
+        vec3 bmax = vec3(0.);
+        for(int c = 0; c < 8; c++){
+            //if the corner is on the surface
+            if(corners[c] == 0){
+                vec3 cornerPos = vec3(c & 1, (c >> 1) & 1, (c >> 2) & 1); // i, j, k
+                bmin = min(bmin,cornerPos); //component wise min
+                bmax = max(bmax,cornerPos);
+            } 
+           
+        }
+         //eq2 in paper - each edge goes from a corner on the near side of an axis to it sneighbor on the far side of that same axis
+        for(int axis = 0; axis < 3; axis++){
+            for(int startCorner = 0; startCorner < 8; startCorner++){
+                //skip corners already on the far side of the axis
+                bool onFarSide = ((startCorner >> axis) & 1) != 0; //shift the wanted digit to the far right, then keep only that digit
+                
+                if(onFarSide) continue; //limit only from 0 -> 1
+
+                int endCorner = startCorner|(1<<axis); //neighbor across the axis (forces the axis' corner to 1) axis 0 1<<0 = 001, 110|001 = 7
+                int s0 = corners[startCorner];
+                int s1 = corners[endCorner];
+
+                //crossing only if signs differ
+                if (s0 * s1 > 0 || s0 == s1) continue;
+
+                float t = float(s0) / float(s0-s1); //porportion along the edge
+
+                vec3 crossing = vec3(startCorner&1, (startCorner>>1)&1, (startCorner >> 2) & 1);
+                crossing[axis] = t; //move to point along edge
+
+                bmin = min(bmin, crossing);
+                bmax = max(bmax, crossing);
+            }
+        }
+        //voxelLocal [0,1] -> brickLocal [0,8]
+        bmin += vec3(voxel_pos);
+        bmax += vec3(voxel_pos);
+
+        //merge voxel's box into the thread's box
+        threadMin = min(threadMin, bmin);
+        threadMax = max(threadMax, bmax);
+    }
+
+    //merge the thread's box into the brick's shared box
+    bool threadFoundSurface = threadMin.x <= threadMax.x;
+    if(threadFoundSurface){
+        for(int axis = 0; axis < 3; axis++){
+            atomicMin(s_aabb_min[axis], floatBitsToUint(threadMin[axis]));
+            atomicMax(s_aabb_max[axis], floatBitsToUint(threadMax[axis]));
+        }
+    }
+    barrier();
 
     // Decide if we keep this brick
     if (gl_LocalInvocationIndex == 0) {
         s_slot = 0xffffffffu; 
-        
+#if USE_D_KEEP_TEST
         // If all SDF samples are > (voxel_diag / 2), 
         // then we guarantee that the SDF surface doesn't lie within this brick!
         // (because we take the absolute value of the distance, can't check sign)
         float voxel_diag = sqrt(3.f) * voxel_size;
-
-        if (uintBitsToFloat(s_min_abs) < 0.5 * voxel_diag) {
+        bool keepBrick = uintBitsToFloat(s_min_abs) < 0.5 * voxel_diag;
+#else   
+        //at least one voxel had a corner sign change, so the box has grown
+        bool keepBrick = uintBitsToFloat(s_aabb_min[0]) <= uintBitsToFloat(s_aabb_max[0]);
+#endif
+        if (keepBrick) {
             // Get dense index (remove empty spots)
             uint slot = uint(atomicAdd(brick_cnt.val, 1));
             if (slot < uint(max_bricks)) {
@@ -109,13 +221,13 @@ void main() {
         return;
     }
 
-    // Quantize to 4 samples per word
+    // Quantize to 4 samples per word - 4 int8 values packed per uint(plain GLSL buffer can't store bytes directly)
     for (uint w = gl_LocalInvocationIndex; w < WORDS_PER_BRICK; w += gl_WorkGroupSize.x) {
         uint word = 0;
         for (uint k = 0; k < 4; k++) {
             uint s = w * 4 + k;
             if (s < BRICK_SAMPLES) {
-                int q = int(round(clamp(s_dists[s] / band, -1.f, 1.f) * 127.f));
+                int q = s_quantized[s];
                 word |= (uint(q) & 0xffu) << (8 * k);
             }
         }
@@ -124,13 +236,35 @@ void main() {
         out_samples.tab[slot * WORDS_PER_BRICK + w] = word;
     }
 
+    //Thread 0 writes the Morton indexa nd the full brick box
     if (gl_LocalInvocationIndex == 0) {
         // Record dense brick index
         out_morton.tab[slot] = brick_idx;
 
+        //Full brick box
+        vec3 fullMin = aabb_min.xyz + vec3(brick) * BRICK_VOXELS * voxel_size;
+        vec3 fullMax = fullMin + BRICK_VOXELS * voxel_size;
+
+        vec3 lo = fullMin;
+        vec3 hi = fullMax;
+
+        //Box can be invalid(inverted) if we use the |d| keeps a brick with no sign change
+        bool boxValid = uintBitsToFloat(s_aabb_min[0]) <= uintBitsToFloat(s_aabb_max[0]);
+
+        if(tight_bricks != 0 && boxValid){
+            //Tight box is in brick-local voxel units 0-8
+            vec3 tightMin = vec3(uintBitsToFloat(s_aabb_min[0]), uintBitsToFloat(s_aabb_min[1]), uintBitsToFloat(s_aabb_min[2]));
+            vec3 tightMax = vec3(uintBitsToFloat(s_aabb_max[0]), uintBitsToFloat(s_aabb_max[1]), uintBitsToFloat(s_aabb_max[2]));
+            
+            //padded slightly so flat boxes have a little thickness
+            float padding = 0.001 * voxel_size;
+
+            //brick-local units to world space, then clamp to the full brick box
+            lo = max(fullMin + tightMin * voxel_size - padding, fullMin);
+            hi = min(fullMin + tightMax * voxel_size + padding, fullMax);
+        }
+
         // Record AABB of brick
-        vec3 lo = aabb_min.xyz + vec3(brick) * BRICK_VOXELS * voxel_size;
-        vec3 hi = lo + BRICK_VOXELS * voxel_size;
         out_aabb.tab[slot * 6 + 0] = lo.x;
         out_aabb.tab[slot * 6 + 1] = lo.y;
         out_aabb.tab[slot * 6 + 2] = lo.z;

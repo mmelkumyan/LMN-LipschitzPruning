@@ -975,6 +975,7 @@ int draw_frame(Init& init, RenderData& data, bool gui) {
             float voxel_size = (data.aabb_max.x - data.aabb_min.x) / 512.f;
             BrickBakePushConstants pc {
                 .aabb_min = glm::vec4(data.aabb_min, 0),
+                //pruning result
                 .prims_ref = data.prims_buffer.address,
                 .binary_ops_ref = data.binary_ops_buffer.address,
                 .nodes_ref = data.nodes_buffer.address,
@@ -982,7 +983,9 @@ int draw_frame(Init& init, RenderData& data, bool gui) {
                 .cells_offset_ref = data.cell_offsets_buffer[data.output_idx].address,
                 .cells_num_active_ref = data.num_active_buffer[data.output_idx].address,
                 .cell_error_out_ref = data.cell_errors[data.output_idx].address,
+                //input slot
                 .brick_cells_num_active_ref = data.num_active_buffer[data.input_idx].address,
+                //outputs
                 .brick_cnt_ref = data.brick_count_buffer.address,
                 .out_morton_ref = data.brick_morton_buffer.address,
                 .out_aabb_ref = data.brick_aabb_buffer.address,
@@ -990,7 +993,8 @@ int draw_frame(Init& init, RenderData& data, bool gui) {
                 .voxel_size = voxel_size,
                 .band = 2.f * sqrtf(3.f) * voxel_size,
                 .max_bricks = MAX_BRICKS,
-                .total_num_nodes = data.push_constants.num_nodes
+                .total_num_nodes = data.push_constants.num_nodes,
+                .tight_bricks = data.tight_bricks ? 1 : 0
             };
 
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, data.brick_bake_pipeline.pipe);
@@ -1852,7 +1856,7 @@ Timings Context::render(glm::vec3 cam_position, glm::vec3 cam_target) {
         render_data.bake_requested = false;
         render_data.bake_recorded = false;
 
-        export_bricks(init, render_data, "test.bricks");
+        export_bricks(init, render_data, render_data.tight_bricks ? "test_tight.bricks" : "test_full.bricks");
     }
 
     return {

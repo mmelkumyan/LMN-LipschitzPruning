@@ -192,7 +192,6 @@ uint morton_encode(ivec3 cell)
 
 
 uint get_cell_idx(ivec3 cell, int grid_size) {
-	//return cell.z * grid_size * grid_size + cell.y * grid_size + cell.x;
     return morton_encode(cell);
 }
 
